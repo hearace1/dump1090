@@ -29,6 +29,9 @@
 //
 
 #include "dump1090.h"
+#ifndef _WIN32
+    #include <poll.h>
+#endif
 //
 // ============================= Networking =============================
 //
@@ -706,6 +709,45 @@ char *aircraftsToJson(int *len) {
 #define MODES_CONTENT_TYPE_JPG  "image/jpeg"
 #define MODES_CONTENT_TYPE_SVG  "image/svg+xml"
 //
+// Write all 'len' bytes of 'buf' to the (non-blocking) client socket, waiting
+// for the socket to become writable when its send buffer is full. A single
+// write() can transfer fewer bytes than requested, which truncated larger
+// assets (e.g. leaflet.js / jquery-ui.js); loop until everything is sent.
+//
+// Returns 0 on success, -1 on a fatal error.
+//
+static int sendAllData(int fd, const char *buf, int len) {
+    int sent = 0;
+    while (sent < len) {
+#ifndef _WIN32
+        int n = write(fd, buf + sent, len - sent);
+#else
+        int n = send(fd, buf + sent, len - sent, 0);
+#endif
+        if (n > 0) {
+            sent += n;
+            continue;
+        }
+        if (n == 0) {
+            return -1;
+        }
+#ifndef _WIN32
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll(&pfd, 1, 5000) < 0 && errno != EINTR) {
+                return -1;
+            }
+            continue;
+        }
+#endif
+        return -1;
+    }
+    return 0;
+}
+//
 // Get an HTTP request header and write the response to the client.
 // gain here we assume that the socket buffer is enough without doing
 // any kind of userspace buffering.
@@ -837,14 +879,10 @@ int handleHTTPRequest(struct client *c, char *p) {
         printf("HTTP Reply header:\n%s", hdr);
     }
 
-    // Send header and content.
-#ifndef _WIN32
-    if ( (write(c->fd, hdr, hdrlen) != hdrlen) 
-      || (write(c->fd, content, clen) != clen) ) {
-#else
-    if ( (send(c->fd, hdr, hdrlen, 0) != hdrlen) 
-      || (send(c->fd, content, clen, 0) != clen) ) {
-#endif
+    // Send header and content, looping until every byte is written so large
+    // assets are not truncated on a non-blocking socket.
+    if ( (sendAllData(c->fd, hdr, hdrlen) != 0)
+      || (sendAllData(c->fd, content, clen) != 0) ) {
         free(content);
         return 1;
     }
