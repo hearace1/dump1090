@@ -53,6 +53,28 @@ In iteractive mode it is possible to have a less information dense but more
 all the recently seen aircrafts with some additional information such as
 altitude and flight number, extracted from the received Mode S packets.
 
+Offline map support
+---
+
+The web interface (`--net`) uses [Leaflet](https://leafletjs.com) with
+OpenStreetMap tiles and bundles all of its JavaScript/CSS locally under
+`public_html/lib/`, so the page loads with no external CDN dependency.
+
+A service worker (`public_html/sw.js`) caches map tiles as you browse. While
+the host is online, pan and zoom around the area(s) you care about; every tile
+that loads is stored in the browser cache. After that, the application shell
+and any area you have already viewed will keep rendering even when the host has
+no network connection. Live aircraft data (`/data.json`) is always fetched in
+real time and is never cached.
+
+Notes:
+
+* The service worker is only registered when the page is opened from a secure
+  context, i.e. `http://localhost` / `http://127.0.0.1` on the machine running
+  dump1090. Tiles for un-visited areas appear blank while offline.
+* The tile cache grows as you browse; clear it via the browser's site-data
+  controls if it gets large.
+
 Using files as source of data
 ---
 

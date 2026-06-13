@@ -30,3 +30,14 @@ table#optionsTabs { width: 100%; font-size: small; font-family: monospace; backg
 
 .pointer { cursor: pointer; }
 
+/* Leaflet divIcon overrides: strip the default white box/border so only the
+   plane SVG (and the site dot) is visible. */
+.leaflet-div-icon.plane_icon,
+.leaflet-div-icon.site_marker { background: none; border: none; }
+
+.site_marker_dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background-color: #2255cc; border: 2px solid #ffffff;
+    box-sizing: border-box;
+}
+

@@ -1,5 +1,6 @@
 // Define our global variables
-var GoogleMap     = null;
+var LeafletMap    = null;
+var TileLayer     = null;
 var Planes        = {};
 var PlanesOnMap   = 0;
 var PlanesOnTable = 0;
@@ -17,11 +18,16 @@ CenterLat = Number(localStorage['CenterLat']) || CONST_CENTERLAT;
 CenterLon = Number(localStorage['CenterLon']) || CONST_CENTERLON;
 ZoomLvl   = Number(localStorage['ZoomLvl']) || CONST_ZOOMLVL;
 
+// Distance in meters between two lat/lon points (replaces the Google geometry library)
+function geoDistance(lat1, lon1, lat2, lon2) {
+	return L.latLng(lat1, lon1).distanceTo(L.latLng(lat2, lon2));
+}
+
 function fetchData() {
 	$.getJSON('/dump1090/data.json', function(data) {
 		PlanesOnMap = 0
 		SpecialSquawk = false;
-		
+
 		// Loop through all the planes in the data packet
 		for (var j=0; j < data.length; j++) {
 			// Do we already have this plane object in Planes?
@@ -31,12 +37,12 @@ function fetchData() {
 			} else {
 				var plane = jQuery.extend(true, {}, planeObject);
 			}
-			
+
 			/* For special squawk tests
 			if (data[j].hex == '48413x') {
             	data[j].squawk = '7700';
             } //*/
-            
+
             // Set SpecialSquawk-value
             if (data[j].squawk == '7500' || data[j].squawk == '7600' || data[j].squawk == '7700') {
                 SpecialSquawk = true;
@@ -44,7 +50,7 @@ function fetchData() {
 
 			// Call the function update
 			plane.funcUpdateData(data[j]);
-			
+
 			// Copy the plane into Planes
 			Planes[plane.icao] = plane;
 		}
@@ -55,142 +61,55 @@ function fetchData() {
 
 // Initalizes the map and starts up our timers to call various functions
 function initialize() {
-	// Make a list of all the available map IDs
-	var mapTypeIds = [];
-	for(var type in google.maps.MapTypeId) {
-		mapTypeIds.push(google.maps.MapTypeId[type]);
-	}
-	// Push OSM on to the end
-	mapTypeIds.push("OSM");
-	mapTypeIds.push("dark_map");
-
-	// Styled Map to outline airports and highways
-	var styles = [
-		{
-			"featureType": "administrative",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		},{
-			"featureType": "landscape",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		},{
-			"featureType": "poi",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		},{
-			"featureType": "road",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		},{
-			"featureType": "transit",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		},{
-			"featureType": "landscape",
-			"stylers": [
-				{ "visibility": "on" },
-				{ "weight": 8 },
-				{ "color": "#000000" }
-			]
-		},{
-			"featureType": "water",
-			"stylers": [
-			{ "lightness": -74 }
-			]
-		},{
-			"featureType": "transit.station.airport",
-			"stylers": [
-				{ "visibility": "on" },
-				{ "weight": 8 },
-				{ "invert_lightness": true },
-				{ "lightness": 27 }
-			]
-		},{
-			"featureType": "road.highway",
-			"stylers": [
-				{ "visibility": "simplified" },
-				{ "invert_lightness": true },
-				{ "gamma": 0.3 }
-			]
-		},{
-			"featureType": "road",
-			"elementType": "labels",
-			"stylers": [
-				{ "visibility": "off" }
-			]
-		}
-	]
-
-	// Add our styled map
-	var styledMap = new google.maps.StyledMapType(styles, {name: "Dark Map"});
-
-	// Define the Google Map
-	var mapOptions = {
-		center: new google.maps.LatLng(CenterLat, CenterLon),
+	// Create the Leaflet map centered on the stored/configured location.
+	LeafletMap = L.map('map_canvas', {
+		center: [CenterLat, CenterLon],
 		zoom: ZoomLvl,
-		mapTypeId: google.maps.MapTypeId.ROADMAP,
-		mapTypeControl: true,
-		streetViewControl: false,
-		mapTypeControlOptions: {
-			mapTypeIds: mapTypeIds,
-			position: google.maps.ControlPosition.TOP_LEFT,
-			style: google.maps.MapTypeControlStyle.DROPDOWN_MENU
-		}
-	};
+		worldCopyJump: true
+	});
 
-	GoogleMap = new google.maps.Map(document.getElementById("map_canvas"), mapOptions);
+	// Base tile layer. Tiles are loaded straight from OpenStreetMap when the
+	// host is online; the service worker (sw.js) transparently caches every
+	// tile that is fetched, so areas you have already browsed keep rendering
+	// when the host has no network connection.
+	TileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+		maxZoom: 18,
+		attribution: '&copy; OpenStreetMap contributors'
+	}).addTo(LeafletMap);
 
-	//Define OSM map type pointing at the OpenStreetMap tile server
-	GoogleMap.mapTypes.set("OSM", new google.maps.ImageMapType({
-		getTileUrl: function(coord, zoom) {
-			return "http://tile.openstreetmap.org/" + zoom + "/" + coord.x + "/" + coord.y + ".png";
-		},
-		tileSize: new google.maps.Size(256, 256),
-		name: "OpenStreetMap",
-		maxZoom: 18
-	}));
+	// Persist center/zoom so a reload (online or offline) returns to the
+	// same view, which is also the view whose tiles are already cached.
+	LeafletMap.on('moveend', function() {
+		var c = LeafletMap.getCenter();
+		localStorage['CenterLat'] = c.lat;
+		localStorage['CenterLon'] = c.lng;
+	});
+	LeafletMap.on('zoomend', function() {
+		localStorage['ZoomLvl'] = LeafletMap.getZoom();
+	});
 
-	GoogleMap.mapTypes.set("dark_map", styledMap);
-	
-	// Listeners for newly created Map
-    google.maps.event.addListener(GoogleMap, 'center_changed', function() {
-        localStorage['CenterLat'] = GoogleMap.getCenter().lat();
-        localStorage['CenterLon'] = GoogleMap.getCenter().lng();
-    });
-    
-    google.maps.event.addListener(GoogleMap, 'zoom_changed', function() {
-        localStorage['ZoomLvl']  = GoogleMap.getZoom();
-    }); 
-	
 	// Add home marker if requested
 	if (SiteShow && (typeof SiteLat !==  'undefined' || typeof SiteLon !==  'undefined')) {
-	    var siteMarker  = new google.maps.LatLng(SiteLat, SiteLon);
-	    var markerImage = new google.maps.MarkerImage(
-	        'http://maps.google.com/mapfiles/kml/pal4/icon57.png',
-            new google.maps.Size(32, 32),   // Image size
-            new google.maps.Point(0, 0),    // Origin point of image
-            new google.maps.Point(16, 16)); // Position where marker should point 
-	    var marker = new google.maps.Marker({
-          position: siteMarker,
-          map: GoogleMap,
-          icon: markerImage,
-          title: 'My Radar Site',
-          zIndex: -99999
-        });
-        
-        if (SiteCircles) {
-            for (var i=0;i<SiteCirclesDistances.length;i++) {
-              drawCircle(marker, SiteCirclesDistances[i]); // in meters
-            }
-        }
+		var siteIcon = L.divIcon({
+			className : 'site_marker',
+			html      : '<div class="site_marker_dot"></div>',
+			iconSize  : [12, 12],
+			iconAnchor: [6, 6]
+		});
+		L.marker([SiteLat, SiteLon], {
+			icon        : siteIcon,
+			title       : 'My Radar Site',
+			zIndexOffset: -100000,
+			interactive : false
+		}).addTo(LeafletMap);
+
+		if (SiteCircles) {
+			for (var i=0;i<SiteCirclesDistances.length;i++) {
+				drawCircle(SiteLat, SiteLon, SiteCirclesDistances[i]); // in nm or km
+			}
+		}
 	}
-	
+
 	// These will run after page is complitely loaded
 	$(window).load(function() {
         $('#dialog-modal').css('display', 'inline'); // Show hidden settings-windows content
@@ -201,7 +120,7 @@ function initialize() {
 
 	// Did our crafty user need some setup?
 	extendedInitalize();
-	
+
 	// Setup our timer to poll from the server.
 	window.setInterval(function() {
 		fetchData();
@@ -231,7 +150,7 @@ function reaper() {
 			PlanesToReap++;
 		}
 	};
-} 
+}
 
 // Refresh the detail window about the plane
 function refreshSelected() {
@@ -239,16 +158,16 @@ function refreshSelected() {
 	if (typeof SelectedPlane !== 'undefined' && SelectedPlane != "ICAO" && SelectedPlane != null) {
     	selected = Planes[SelectedPlane];
     }
-	
+
 	var columns = 2;
 	var html = '';
-	
+
 	if (selected) {
     	html += '<table id="selectedinfo" width="100%">';
     } else {
         html += '<table id="selectedinfo" class="dim" width="100%">';
     }
-	
+
 	// Flight header line including squawk if needed
 	if (selected && selected.flight == "") {
 	    html += '<tr><td colspan="' + columns + '" id="selectedinfotitle"><b>N/A (' +
@@ -259,7 +178,7 @@ function refreshSelected() {
 	} else {
 	    html += '<tr><td colspan="' + columns + '" id="selectedinfotitle"><b>DUMP1090</b>';
 	}
-	
+
 	if (selected && selected.squawk == 7500) { // Lets hope we never see this... Aircraft Hijacking
 		html += '&nbsp;<span class="squawk7500">&nbsp;Squawking: Aircraft Hijacking&nbsp;</span>';
 	} else if (selected && selected.squawk == 7600) { // Radio Failure
@@ -273,7 +192,7 @@ function refreshSelected() {
 	    html += '&nbsp;<a href="http://flightaware.com/live/flight/'+selected.flight+'" target="_blank">[FlightAware]</a>';
 	}
 	html += '<td></tr>';
-	
+
 	if (selected) {
 	    if (Metric) {
         	html += '<tr><td>Altitude: ' + Math.round(selected.altitude / 3.2828) + ' m</td>';
@@ -283,14 +202,14 @@ function refreshSelected() {
     } else {
         html += '<tr><td>Altitude: n/a</td>';
     }
-		
+
 	if (selected && selected.squawk != '0000') {
 		html += '<td>Squawk: ' + selected.squawk + '</td></tr>';
 	} else {
 	    html += '<td>Squawk: n/a</td></tr>';
 	}
-	
-	html += '<tr><td>Speed: ' 
+
+	html += '<tr><td>Speed: '
 	if (selected) {
 	    if (Metric) {
 	        html += Math.round(selected.speed * 1.852) + ' km/h';
@@ -301,14 +220,14 @@ function refreshSelected() {
 	    html += 'n/a';
 	}
 	html += '</td>';
-	
+
 	if (selected) {
         html += '<td>ICAO (hex): ' + selected.icao + '</td></tr>';
     } else {
         html += '<td>ICAO (hex): n/a</td></tr>'; // Something is wrong if we are here
     }
-    
-    html += '<tr><td>Track: ' 
+
+    html += '<tr><td>Track: '
 	if (selected && selected.vTrack) {
 	    html += selected.track + '&deg;' + ' (' + normalizeTrack(selected.track, selected.vTrack)[1] +')';
 	} else {
@@ -319,13 +238,11 @@ function refreshSelected() {
 	html += '<tr><td colspan="' + columns + '" align="center">Lat/Long: ';
 	if (selected && selected.vPosition) {
 	    html += selected.latitude + ', ' + selected.longitude + '</td></tr>';
-	    
+
 	    // Let's show some extra data if we have site coordinates
 	    if (SiteShow) {
-            var siteLatLon  = new google.maps.LatLng(SiteLat, SiteLon);
-            var planeLatLon = new google.maps.LatLng(selected.latitude, selected.longitude);
-            var dist = google.maps.geometry.spherical.computeDistanceBetween (siteLatLon, planeLatLon);
-            
+            var dist = geoDistance(SiteLat, SiteLon, selected.latitude, selected.longitude);
+
             if (Metric) {
                 dist /= 1000;
             } else {
@@ -337,7 +254,7 @@ function refreshSelected() {
         } // End of SiteShow
 	} else {
 	    if (SiteShow) {
-	        html += '<tr><td colspan="' + columns + '" align="center">Distance from Site: n/a ' + 
+	        html += '<tr><td colspan="' + columns + '" align="center">Distance from Site: n/a ' +
 	            (Metric ? ' km' : ' NM') + '</td></tr>';
 	    } else {
     	    html += 'n/a</td></tr>';
@@ -345,7 +262,7 @@ function refreshSelected() {
 	}
 
 	html += '</table>';
-	
+
 	document.getElementById('plane_detail').innerHTML = html;
 }
 
@@ -354,7 +271,7 @@ function refreshSelected() {
 // TODO: Edit C code to add a valid speed flag
 // TODO: Edit js code to use said flag
 function normalizeSpeed(speed, valid) {
-	return speed	
+	return speed
 }
 
 // Returns back a long string, short string, and the track if we have a vaild track path
@@ -436,13 +353,13 @@ function refreshTableInfo() {
 			if (tableplane.squawk == 7700) {
 				specialStyle += " squawk7700";
 			}
-			
+
 			if (tableplane.vPosition == true) {
 				html += '<tr class="plane_table_row vPosition' + specialStyle + '">';
 			} else {
 				html += '<tr class="plane_table_row ' + specialStyle + '">';
 		    }
-		    
+
 			html += '<td>' + tableplane.icao + '</td>';
 			html += '<td>' + tableplane.flight + '</td>';
 			if (tableplane.squawk != '0000' ) {
@@ -450,7 +367,7 @@ function refreshTableInfo() {
     	    } else {
     	        html += '<td align="right">&nbsp;</td>';
     	    }
-    	    
+
     	    if (Metric) {
     			html += '<td align="right">' + Math.round(tableplane.altitude / 3.2828) + '</td>';
     			html += '<td align="right">' + Math.round(tableplane.speed * 1.852) + '</td>';
@@ -462,9 +379,7 @@ function refreshTableInfo() {
                         if (SiteShow && (typeof SiteLat !==  'undefined' || typeof SiteLon !==  'undefined')) {
                         html += '<td align="right">';
                             if (tableplane.vPosition) {
-                                var siteLatLon  = new google.maps.LatLng(SiteLat, SiteLon);
-                                var planeLatLon = new google.maps.LatLng(tableplane.latitude, tableplane.longitude);
-                                var dist = google.maps.geometry.spherical.computeDistanceBetween (siteLatLon, planeLatLon);
+                                var dist = geoDistance(SiteLat, SiteLon, tableplane.latitude, tableplane.longitude);
                                     if (Metric) {
                                         dist /= 1000;
                                     } else {
@@ -477,7 +392,7 @@ function refreshTableInfo() {
                             }
                             html += '</td>';
                         }
-			
+
 			html += '<td align="right">';
 			if (tableplane.vTrack) {
     			 html += normalizeTrack(tableplane.track, tableplane.vTrack)[2];
@@ -524,7 +439,7 @@ function setASC_DESC(iCol) {
 	}
 }
 
-function sortTable(szTableID,iCol) { 
+function sortTable(szTableID,iCol) {
 	//if iCol was not provided, and iSortCol is not set, assign default value
 	if (typeof iCol==='undefined'){
 		if(iSortCol!=-1){
@@ -588,7 +503,7 @@ function selectPlaneByHex(hex) {
 		Planes[SelectedPlane].markerColor = MarkerColor;
 		// If the selected has a marker, make it not stand out
 		if (Planes[SelectedPlane].marker) {
-			Planes[SelectedPlane].marker.setIcon(Planes[SelectedPlane].funcGetIcon());
+			Planes[SelectedPlane].funcUpdateMarker();
 		}
 	}
 
@@ -600,9 +515,9 @@ function selectPlaneByHex(hex) {
 		// If the selected has a marker, make it stand out
 		if (Planes[SelectedPlane].marker) {
 			Planes[SelectedPlane].funcUpdateLines();
-			Planes[SelectedPlane].marker.setIcon(Planes[SelectedPlane].funcGetIcon());
+			Planes[SelectedPlane].funcUpdateMarker();
 		}
-	} else { 
+	} else {
 		SelectedPlane = null;
 	}
     refreshSelected();
@@ -614,16 +529,15 @@ function resetMap() {
     localStorage['CenterLat'] = CONST_CENTERLAT;
     localStorage['CenterLon'] = CONST_CENTERLON;
     localStorage['ZoomLvl']   = CONST_ZOOMLVL;
-    
+
     // Try to read values from localStorage else use CONST_s
     CenterLat = Number(localStorage['CenterLat']) || CONST_CENTERLAT;
     CenterLon = Number(localStorage['CenterLon']) || CONST_CENTERLON;
     ZoomLvl   = Number(localStorage['ZoomLvl']) || CONST_ZOOMLVL;
-    
+
     // Set and refresh
-	GoogleMap.setZoom(parseInt(ZoomLvl));
-	GoogleMap.setCenter(new google.maps.LatLng(parseFloat(CenterLat), parseFloat(CenterLon)));
-	
+	LeafletMap.setView([parseFloat(CenterLat), parseFloat(CenterLon)], parseInt(ZoomLvl));
+
 	if (SelectedPlane) {
 	    selectPlaneByHex(SelectedPlane);
 	}
@@ -632,27 +546,25 @@ function resetMap() {
 	refreshTableInfo();
 }
 
-function drawCircle(marker, distance) {
+function drawCircle(lat, lon, distance) {
     if (typeof distance === 'undefined') {
         return false;
-        
-        if (!(!isNaN(parseFloat(distance)) && isFinite(distance)) || distance < 0) {
-            return false;
-        }
     }
-    
+    if (!(!isNaN(parseFloat(distance)) && isFinite(distance)) || distance < 0) {
+        return false;
+    }
+
     distance *= 1000.0;
     if (!Metric) {
         distance *= 1.852;
     }
-    
-    // Add circle overlay and bind to marker
-    var circle = new google.maps.Circle({
-      map: GoogleMap,
-      radius: distance, // In meters
-      fillOpacity: 0.0,
-      strokeWeight: 1,
-      strokeOpacity: 0.3
-    });
-    circle.bindTo('center', marker, 'position');
+
+    // Add range ring overlay centered on the site
+    L.circle([lat, lon], {
+        radius     : distance, // In meters
+        fill       : false,
+        weight     : 1,
+        opacity    : 0.3,
+        interactive: false
+    }).addTo(LeafletMap);
 }

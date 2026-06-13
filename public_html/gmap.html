@@ -1,11 +1,13 @@
 <html>
 	<head>
 		<meta charset="utf-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<link rel="stylesheet" type="text/css" href="lib/leaflet.css" />
+		<link rel="stylesheet" type="text/css" href="lib/jquery-ui.css" />
 		<link rel="stylesheet" type="text/css" href="style.css" />
-		<link rel="stylesheet" href="http://code.jquery.com/ui/1.10.3/themes/smoothness/jquery-ui.css" />
-		<script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
-		<script src="//ajax.googleapis.com/ajax/libs/jqueryui/1.10.3/jquery-ui.min.js"></script>
-		<script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?sensor=false&amp;libraries=geometry"></script>
+		<script type="text/javascript" src="lib/leaflet.js"></script>
+		<script type="text/javascript" src="lib/jquery.js"></script>
+		<script type="text/javascript" src="lib/jquery-ui.js"></script>
 		<script type="text/javascript" src="config.js"></script>
 		<script type="text/javascript" src="planeObject.js"></script>
 		<script type="text/javascript" src="options.js"></script>
@@ -15,6 +17,17 @@
 		<script type="text/javascript" src="coolclock/coolclock.js"></script>
 		<script type="text/javascript" src="coolclock/moreskins.js"></script>
         <title>DUMP1090</title>
+		<script type="text/javascript">
+			// Register the service worker so the app shell and the map tiles
+			// you have already browsed keep working when the host is offline.
+			if ('serviceWorker' in navigator) {
+				window.addEventListener('load', function() {
+					navigator.serviceWorker.register('sw.js').catch(function(err) {
+						console.log('Offline cache unavailable:', err);
+					});
+				});
+			}
+		</script>
 	</head>
 	<body onload="initialize()">
 		<div id="dialog-modal" title="Basic modal dialog" style="display:none;">
